@@ -32,7 +32,6 @@ def invert_spectrogram(spec, coef=1.2, n_fft=1024, sr=16000, return_float=True, 
         s_m = librosa.core.stft(y, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
         s_m = spec * s_m / np.abs(s_m)
         y = librosa.core.istft(s_m, hop_length=hop_length, win_length=win_length)
-        print('hop', hop_length, 'nfft', n_fft, 'win_len', win_length)
     if de_emp:
         y = de_emphasis(y, 0.85)
     if return_float:

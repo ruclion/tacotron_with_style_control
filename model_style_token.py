@@ -15,7 +15,7 @@ import audio
 
 bidirectional_dynamic_rnn = tf.nn.bidirectional_dynamic_rnn
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1, 2"
 sr = 16000
 
 EPOCHS = 100000	# 7142 -> 2M
@@ -251,7 +251,7 @@ with tf.variable_scope("model"):
         for i, (grad, var) in enumerate(grads_and_vars):
             # print(var.name)
             if var.name.find('style_token:0') != -1:
-                grads_and_vars[i] = (grad / 200.0, var)
+                grads_and_vars[i] = (grad * 0, var)
                 print(var.name)
                 print('hhhh time')
                 break

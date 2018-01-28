@@ -5,9 +5,16 @@ import librosa
 import matplotlib.pyplot as plt
 import audio
 import  xml.dom.minidom
-import codecs
-import tensorflow as tf
 
+
+
+with open('style_value.pkl', 'rb') as f:
+    stats = pkl.load(f)
+print(stats)
+
+
+'''
+import tensorflow as tf
 OUTPUT_MEL_DIM = 80	# 80
 OUTPUT_SPEC_DIM = 513 # 513
 tfrecord_path = './data/th-coss_female_wav_mel_stftm.tfrecords'
@@ -90,7 +97,7 @@ with tf.Session() as sess:
     print(t)
     pred_audio, exp_spec = audio.invert_spectrogram(t, 1.2)
     siowav.write('generate.wav', sr, pred_audio)
-
+'''
 '''
 
 frame_shift = 0.0125

@@ -46,7 +46,7 @@ pkl_path = './data/th-coss_female_stats.pkl'
 
 
 
-MAX_OUT_STEPS = 600
+MAX_OUT_STEPS = 200
 BATCH_SIZE = 1
 
 
@@ -149,14 +149,21 @@ class TTS(Model):
                 with tf.variable_scope("weighting"):
                     weighting = add_layer(query, query.shape[-1], 1, 'weighting_w', 'weighting_b',
                                           activation_function=tf.nn.sigmoid)
+
                     # weighting = tf.nn.softmax(weighting)
                     weight_ta = weight_ta.write(time, weighting)
                 with tf.variable_scope("acoustic_module"):
                     # weighting0 = tf.reshape(weighting[:, 0], (BATCH_SIZE, 1))
                     # weighting1 = tf.reshape(weighting[:, 1], (BATCH_SIZE, 1))
                     # weighting_context = weighting0 * context + weighting1 * context_style
-                    print('context:', context)
+                    # print('context:', context)
+                    weighting = tf.Print(weighting, [weighting], message='weight', summarize=100)
+                    context_style = tf.Print(context_style, [context_style[0][0:5]], message='origal_style', summarize=100)
+                    context_style = tf.Print(context_style, [tf.nn.tanh(context_style)[0][0:5]], message='tanh_style', summarize=100)
+                    context = tf.Print(context, [context[0][0:5]], message='context', summarize=100)
+
                     weighting_context = context + weighting * tf.nn.tanh(context_style)
+
                     aco_input = tf.layers.dense(tf.concat([att_cell_out, weighting_context], axis=-1), DEC_RNN_SIZE)
                     aco_cell_out, aco_cell_state = aco_cell(aco_input, state_tup[1])
                     dense_out = tf.reshape(
@@ -191,7 +198,7 @@ class TTS(Model):
 
             final_weight_ta = tf.reshape(final_weight_ta.stack(), shape=(reduced_time_steps, batch_size, 1))
             self.final_weight_ta = tf.transpose(final_weight_ta, perm=(1, 0, 2))  # batch major
-
+            # self.final_weight_ta = tf.Print(self.final_weight_ta, [self.final_weight_ta])
 
 
 
@@ -307,6 +314,9 @@ if __name__ == "__main__":
         trained_style_token = sess.run(model.single_style_token)
         ass_style_token = tf.placeholder(name="ass_style_token", shape=(1, styles_kind, style_dim), dtype=tf.float32)
         ass_opt = model.single_style_token.assign(ass_style_token)
+        print(trained_style_token)
+        with open('style_value.pkl', "wb") as f:
+            pkl.dump({'style':trained_style_token}, f)
 
 
         cnt = 0
@@ -318,22 +328,32 @@ if __name__ == "__main__":
             tok, lenar = utt2tok(got_utt)
 
             print("Generating ...")
+            print('next is --------', 'original')
+            pred_out, alpha_hjk_img, alpha_style_hjk_img, weight_hjk_img = sess.run(
+                [model.out_stftm, model.final_alpha, model.final_alpha_style, model.final_weight_ta],
+                feed_dict={inp: tok, inp_mask: lenar})
+            pred_out = pred_out * stats["log_stftm_std"] + stats["log_stftm_mean"]
+            pred_audio, exp_spec = audio.invert_spectrogram(pred_out, 1.2)
+            siowav.write(os.path.join(generate_wav_path, "%dXoriginal.wav" % (cnt)), sr, pred_audio)
 
             for i in range(0, styles_kind):
-                for tim in range(1, 4):
+                for tim in range(0, 5):
+                    print('next is --------', i, tim)
                     unique_style_token = np.copy(trained_style_token)
-                    unique_style_token[0] += tim * trained_style_token[0][i]
+                    if tim == 0:
+                        unique_style_token[0][i] = 0
+                    elif tim == 5:
+                        for j in range(0, styles_kind):
+                            if j != i:
+                                unique_style_token[0][j] = 0
+                    else:
+                        unique_style_token[0] += tim * trained_style_token[0][i]
+
                     sess.run(ass_opt, feed_dict={ass_style_token: unique_style_token})
-                    print(unique_style_token[0])
                     pred_out, alpha_hjk_img, alpha_style_hjk_img, weight_hjk_img = sess.run([model.out_stftm, model.final_alpha, model.final_alpha_style, model.final_weight_ta], feed_dict={inp:tok, inp_mask:lenar})
-                    print('tensorflow is over')
                     pred_out = pred_out * stats["log_stftm_std"] + stats["log_stftm_mean"]
-
-                    # de-emphasis defined in audio.py
-
-
-
                     pred_audio, exp_spec = audio.invert_spectrogram(pred_out, 1.2)
+                    siowav.write(os.path.join(generate_wav_path, "%dX%dX%d.wav" % (cnt, i, tim)), sr, pred_audio)
 
                     '''
                     # plt.subplot(2, 2, 1)
@@ -365,7 +385,18 @@ if __name__ == "__main__":
                     plt.show()
                     '''
                     print('can not write???')
-                    siowav.write(os.path.join(generate_wav_path, "%dX%dX%d.wav" % (cnt, i, tim)), sr, pred_audio)
+
+            print('next is --------', 'all no')
+            unique_style_token[0] = unique_style_token[0] * 0
+            sess.run(ass_opt, feed_dict={ass_style_token: unique_style_token})
+            pred_out, alpha_hjk_img, alpha_style_hjk_img, weight_hjk_img = sess.run(
+                [model.out_stftm, model.final_alpha, model.final_alpha_style, model.final_weight_ta],
+                feed_dict={inp: tok, inp_mask: lenar})
+            pred_out = pred_out * stats["log_stftm_std"] + stats["log_stftm_mean"]
+            pred_audio, exp_spec = audio.invert_spectrogram(pred_out, 1.2)
+            siowav.write(os.path.join(generate_wav_path, "%dXallno.wav" % (cnt)), sr, pred_audio)
+
+
 
             sess.run(ass_opt, feed_dict={ass_style_token: trained_style_token})
             print("Done!")
