@@ -7,21 +7,26 @@ import os
 import argparse
 import tqdm
 import random
+from scipy import interpolate
 
 char_map = {}
 cnt = 1
+target_sr = 16000
+cnt_len_0 = 0
+cnt_tot = 0
+cnt_len_450 = 0
 
 
 def get_arguments():
     parser = argparse.ArgumentParser(description="Convert wav file to TFRecords file.")
 
-    parser.add_argument("--wav_root", "-s", type=str, default="../raw_data//audioBook", help="")
-    parser.add_argument("--target_path", "-d", type=str, default="./aB_wav_mel_stftm.tfrecords", help="")
-    parser.add_argument("--stats_path", type=str, default="./aB_stats.pkl", help="where to store the norm coefs.")
-    parser.add_argument("--sr", type=int, default=24000, help="")
+    parser.add_argument("--wav_root", "-s", type=str, default="./audioBook", help="")
+    parser.add_argument("--target_path", "-d", type=str, default="./sr16_aB_wav_mel_stftm.tfrecords", help="")
+    parser.add_argument("--stats_path", type=str, default="./sr16_aB_stats.pkl", help="where to store the norm coefs.")
+    parser.add_argument("--sr", type=int, default=16000, help="")
     parser.add_argument("--frame_shift", type=float, default=0.0125, help="")
     parser.add_argument("--frame_size", type=float, default=0.050, help="")
-    parser.add_argument("--n_fft", type=int, default=2048, help="")
+    parser.add_argument("--n_fft", type=int, default=1024, help="")
     parser.add_argument("--n_mels", type=int, default=80, help="")
     parser.add_argument("--window", type=str, default="hann", help="")
     parser.add_argument("--floor_gate", type=float, default=0.01, help="")
@@ -58,6 +63,7 @@ def get_stats(wav_path_list, random_num, sr, frame_shift, frame_size, n_fft, win
     log_stftm_list, log_mel_list = [], []
     for wav_path in random_sel_wav_list:
         this_sr, this_wav = siowav.read(wav_path)
+        this_sr, this_wav = change_sample_rate(this_sr, this_wav, target_sr)
         assert this_sr == sr, "[E] {}'sr is {}, NOT {}".format(wav_path, this_sr, sr)
         txt_path = wav_path.replace('.wav', '.lab').replace('_wav_24k', '_lab')
         with open(txt_path, 'r') as f:
@@ -95,8 +101,22 @@ def get_char_no(ch):
         cnt += 1
         return char_map[ch]
 
+
+def change_sample_rate(old_samplerate, old_audio, NEW_SAMPLERATE):
+    if old_samplerate != NEW_SAMPLERATE:
+        duration = old_audio.shape[0] // old_samplerate
+
+        time_old = np.linspace(0, duration, old_audio.shape[0])
+        time_new = np.linspace(0, duration, int(old_audio.shape[0] * NEW_SAMPLERATE / old_samplerate))
+
+        interpolator = interpolate.interp1d(time_old, old_audio.T)
+        new_audio = interpolator(time_new).T
+        return NEW_SAMPLERATE, new_audio
+
 def read_to_bytes(path, stats, sr, frame_shift, frame_size, n_fft, window, mel_filterbank, floor_gate):
+    global cnt_len_0, cnt_len_450
     this_sr, this_wav = siowav.read(path)
+    this_sr, this_wav = change_sample_rate(this_sr, this_wav, target_sr)
     assert this_sr == sr, "[E] {}'sr is {}, NOT {}".format(path, this_sr, sr)
 
     txt_path = path.replace('.wav', '.lab').replace('_wav_24k', '_lab')
@@ -104,6 +124,12 @@ def read_to_bytes(path, stats, sr, frame_shift, frame_size, n_fft, window, mel_f
         txt = f.read()
     txt = np.asarray(list(map(get_char_no, txt)))
     txt_len = txt.shape[0]
+
+
+    if len(txt) == 0:
+        cnt_len_0 += 1
+        print('happen')
+        return False, False
 
     # print('check:', txt_len)
     txt_raw = txt.tostring()
@@ -119,6 +145,9 @@ def read_to_bytes(path, stats, sr, frame_shift, frame_size, n_fft, window, mel_f
     key = path.encode("utf-8")
     wav_raw = this_wav.tostring()
     frames = norm_mel.shape[0]
+    if frames > 450:
+        cnt_len_450 += 1
+        return False, False
     norm_stftm_raw = norm_stftm.astype(np.float32).tostring()
     norm_mel_raw = norm_mel.astype(np.float32).tostring()
     # create tf example feature
@@ -131,7 +160,7 @@ def read_to_bytes(path, stats, sr, frame_shift, frame_size, n_fft, window, mel_f
         "txt_len": _int64_feature(int(txt_len)),
         "norm_stftm_raw": _bytes_feature(norm_stftm_raw),
         "norm_mel_raw": _bytes_feature(norm_mel_raw)}))
-    return example.SerializeToString()
+    return example.SerializeToString(), True
 
 
 def get_path_lst(root, cur_list=[]):
@@ -146,6 +175,7 @@ def get_path_lst(root, cur_list=[]):
 
 
 def main():
+    global cnt_tot
     print(__file__)
     args = get_arguments()
 
@@ -170,18 +200,16 @@ def main():
     # 5th. extract features, normalize them and write them back to disk.
     with tf.python_io.TFRecordWriter(args.target_path) as writer:
         for path in tqdm.tqdm(path_lst):
-            txt_path = path.replace('.wav', '.lab').replace('_wav_24k', '_lab')
-            with open(txt_path, 'r') as f:
-                txt = f.read()
-            if len(txt) == 0:
-                print('happen')
-                continue
+
             try:
-                example_str = read_to_bytes(path=path, stats=stats, sr=args.sr,
+                example_str, value_tag = read_to_bytes(path=path, stats=stats, sr=args.sr,
                                             frame_shift=args.frame_shift, frame_size=args.frame_size,
                                             n_fft=args.n_fft, window=args.window,
                                             mel_filterbank=mel_filterbank, floor_gate=args.floor_gate)
-                writer.write(example_str)
+                if value_tag == True:
+                    cnt_tot += 1
+                    # print('have ***')
+                    writer.write(example_str)
             except ValueError as e:
                 print(e, path)
 
@@ -190,3 +218,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    print(cnt_tot, cnt_len_0, cnt_len_450)

@@ -4,14 +4,20 @@ import pickle as pkl
 import librosa
 import matplotlib.pyplot as plt
 import audio
-import  xml.dom.minidom
+import xml.dom.minidom
 
 
+this_sr, this_wav = siowav.read('0.wav')
+print(this_wav, this_sr)
+print(np.min(this_wav), np.max(this_wav))
+
+
+'''
 
 with open('style_value.pkl', 'rb') as f:
     stats = pkl.load(f)
 print(stats)
-
+'''
 
 '''
 import tensorflow as tf

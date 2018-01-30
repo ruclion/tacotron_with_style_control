@@ -291,9 +291,8 @@ def get_dataset(tfrecord_path):
     dataset = tf.data.TFRecordDataset(tfrecord_path)
     dataset = dataset.map(parse_single_example)
     print('???????????????????')
-    dataset = dataset.repeat(1000)
     dataset = dataset.shuffle(10000)
-
+    dataset = dataset.repeat(100000)
     dataset = dataset.padded_batch(BATCH_SIZE, padded_shapes={
                                                      "frames": (),
 
