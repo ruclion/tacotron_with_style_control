@@ -14,9 +14,11 @@ class HyperParams:
         self.learning_rate = [0.001, 0.0005, 0.0003, 0.0001]
         self.learning_rate_decay_step = [50000, 80000, 200000]
         self.clip_norm = None
-        self.batch_size = 32
+        self.batch_size = 2
         self.split_nums = 32
         self.max_global_steps = 200000
+        self.styles_kind = 10
+        self.style_dim = 256
         if isinstance(param_dict, dict):
             self._update_from_dict(param_dict)
         elif isinstance(param_json_path, str) and os.path.exists(param_json_path):
