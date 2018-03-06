@@ -45,10 +45,15 @@ class BahdanauAttentionModule(object):
             b  = tf.get_variable(name='b',  shape=(self.attention_units,),
                                  initializer=tf.constant_initializer(0.0) if self.mode == 0 else tf.constant_initializer(0.5))
 
+            # query = tf.Print(query, [query], message='query:' + query.name, summarize=5)
+            # Wa = tf.Print(Wa, [Wa], message='Wa:' + Wa.name, summarize=10)
+
             # 1st. compute query_feat (query's repsentation in attention module)
             query_feat = tf.reshape(tf.matmul(query, Wa), (-1, 1, 1, self.attention_units))
-
+            # query_feat = tf.Print(query_feat, [query_feat], message='query_feat:' + query_feat.name, summarize=5)
+            # self.hidden_feats = tf.Print(self.hidden_feats, [self.hidden_feats], message='hidden_feats:' + query_feat.name, summarize=5)
             # 2nd. compute the energy for all time steps in encoder (element-wise mul then reduce)
+            # Va = tf.Print(Va, [Va], message='Va' + Va.name, summarize=7)
             e = tf.reduce_sum(Va * tf.nn.tanh(self.hidden_feats + query_feat + b), axis=(2,3))
 
             # 3rd. compute the score
@@ -58,7 +63,7 @@ class BahdanauAttentionModule(object):
                 alpha = tf.divide(exp_e, tf.reduce_sum(exp_e, axis=-1, keep_dims=True))
             else:
                 alpha = tf.nn.softmax(e)
-
+            # alpha = tf.Print(alpha, [alpha], message='alhpa:', summarize=10)
             # 4th. get the weighted context from memory (element-wise mul then reduce)
             context = tf.reshape(alpha, (tf.shape(query)[0], self.enc_length, 1, 1)) * self.memory
             context = tf.reduce_sum(context, axis=(1, 2))

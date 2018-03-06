@@ -8,13 +8,13 @@ import hjk_tools.audio as audio
 import math
 import codecs
 from best_tacotron.hyperparameter_style import HyperParams
-from best_tacotron.train_feedcontext2att_old_style import Tacotron
+from best_tacotron.train_model_style2 import Tacotron
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 hp = HyperParams()
 
 
-data_name = 'sr16_aB_2_style________________'
+data_name = 'sr16_aB_3_style2'
 save_path = os.path.join('model', data_name)
 model_name = "TTS"
 tfrecord_train_path = './data/sr16_aB_sorted_train.tfrecords'
@@ -106,9 +106,9 @@ def get_style_token(trained_style_token, style_no):
         tag = t[(style_no - 2) // 3]
         cat = (style_no - 2) % 3
         if cat == 0:
-            unique_style_token += trained_style_token[0][tag]
+            unique_style_token += trained_style_token[0][tag] * 0.5
         elif cat == 1:
-            unique_style_token += trained_style_token[0][tag] * 2
+            unique_style_token += trained_style_token[0][tag] * 1
         elif cat == 2:
             unique_style_token = unique_style_token * 0 + trained_style_token[0][tag]
     return unique_style_token
@@ -116,9 +116,7 @@ def get_style_token(trained_style_token, style_no):
 
 
 
-
 def main():
-
     with tf.variable_scope('data'):
         inp = tf.placeholder(name='inp', shape=(None, None), dtype=tf.int32)
         inp_mask = tf.placeholder(name='inp_mask', shape=(None,), dtype=tf.int32)
@@ -154,7 +152,7 @@ def main():
         for i, (grad, var) in enumerate(grads_and_vars):
             # print(var.name)
             if var.name.find('style_token:0') != -1:
-                grads_and_vars[i] = (grad / 200, var)
+                grads_and_vars[i] = (grad * 0, var)
                 print(var.name)
                 print('hhhh time')
                 break
@@ -183,7 +181,7 @@ def main():
             print('restore path:', ckpt_name)
         else:
             print('no restor, init all include style:')
-            np.random.seed(1)
+            # np.random.seed(1)
             init_style_token = np.random.uniform(low=-1, high=1, size=(1, hp.styles_kind, hp.style_dim))
             print('look random:', np.max(init_style_token), np.min(init_style_token))
             sess.run(ass_opt, feed_dict={ass_style_token: init_style_token})
@@ -208,11 +206,11 @@ def main():
                 batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth = get_next_batch(sess, train_next_item)
                 # print('bug', batch_inp[0], 'len', batch_inp_mask[0], 'actual', batch_inp[0].shape)
                 batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth = post_next_batch(batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth, train_meta)
-                print(batch_mel_gtruth.shape[1], batch_inp[0][0])
+                # print(batch_mel_gtruth.shape[1], batch_inp[0][0])
                 # print(batch_inp_mask)
                 # print('look', batch_mel_gtruth[0], batch_spec_gtruth[0])
                 train_time = time.time()
-                print('pre time:', train_time - pre_time)
+                # print('pre time:', train_time - pre_time)
 
                 _, loss_eval, global_step_eval = sess.run(
                     [train_upd, train_model.loss, train_model.global_step],
@@ -291,7 +289,7 @@ def main():
 
                 post_time = time.time()
 
-                print('train time:', post_time - train_time)
+                # print('train time:', post_time - train_time)
 
 
         except Exception as e:

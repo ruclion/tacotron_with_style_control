@@ -8,14 +8,14 @@ import hjk_tools.audio as audio
 import math
 import codecs
 from best_tacotron.hyperparameter_style import HyperParams
-from best_tacotron.generate_feedcontext2att_old_style import Tacotron
+from best_tacotron.generate_feedcontext2att_old_style_CRNN_CSM_Ctr import Tacotron
 import scipy.io.wavfile as siowav
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 hp = HyperParams()
 
 
-data_name = 'sr16_aB_2_style_batchS'
+data_name = 'sr16_aB_2_style_mask_CSM_Ctr'
 save_path = os.path.join('model', data_name)
 model_name = "TTS"
 tfrecord_train_path = './data/sr16_aB_sorted_train.tfrecords'
@@ -24,7 +24,7 @@ pkl_train_path = './data/sr16_aB_sorted_train.pkl'
 pkl_dev_path = './data/sr16_aB_sorted_dev.pkl'
 tb_logs_path = os.path.join('logs', data_name) + '/generate_log/'
 dev_txt_path = os.path.join('logs', data_name) + '/dev_loss.txt'
-generate_path = os.path.join('logs', data_name) + '/generate/'
+generate_path = os.path.join('logs', data_name) + '/generate_debug/'
 
 
 
@@ -123,6 +123,34 @@ def get_style_token(trained_style_token, style_no):
 
     return unique_style_token
 
+def get_style_attention(style_no):
+    unique_style_token = np.zeros([32, 10], dtype=np.float32)
+    for i in range(32):
+        if style_no < 70:
+            tag = style_no // 7
+            cat = style_no % 7
+            if cat == 0:
+                unique_style_token[i][tag] += 0.1
+            elif cat == 1:
+                unique_style_token[i][tag] += 0.3
+            elif cat == 2:
+                unique_style_token[i][tag] += 0.5
+            elif cat == 3:
+                unique_style_token[i][tag] += 0.7
+            elif cat == 4:
+                unique_style_token[i][tag] += 1.0
+            elif cat == 5:
+                unique_style_token[i][tag] += 1.2
+            elif cat == 6:
+                unique_style_token[i][tag] += 1.3
+        else:
+            if style_no == 70:
+                pass
+            elif style_no == 71:
+                pass
+
+    return unique_style_token
+
 
 
 
@@ -132,6 +160,7 @@ def main():
         inp = tf.placeholder(name='inp', shape=(None, None), dtype=tf.int32)
         inp_mask = tf.placeholder(name='inp_mask', shape=(None,), dtype=tf.int32)
         decode_time_steps = tf.placeholder(name='decode_time_steps', shape=(), dtype=tf.int32)
+        style_attention = tf.placeholder(name='style_att', shape=(None, 10), dtype=tf.float32)
 
 
 
@@ -145,7 +174,7 @@ def main():
         dev_meta = pkl.load(f)
         dev_meta['reduction_rate'] = hp.reduction_rate
 
-    model = Tacotron(inp, inp_mask, decode_time_steps, hyper_params=hp)
+    model = Tacotron(inp, inp_mask, decode_time_steps, style_attention, hyper_params=hp)
 
 
     dev_batches_per_epoch = math.ceil(len(dev_meta['key_lst']) / hp.batch_size)
@@ -191,19 +220,32 @@ def main():
                 print(var.decode())
 
             # print(batch_char_txt)
-            trained_style_token = sess.run(model.single_style_token)
-            for style_no in range(72):
-                unique_style_token = get_style_token(trained_style_token, style_no)
-                sess.run(ass_opt, feed_dict={ass_style_token: unique_style_token})
-                pred_out = sess.run(model.post_output, feed_dict={inp: batch_inp, inp_mask: batch_inp_mask, decode_time_steps: batch_mel_gtruth.shape[1] // hp.reduction_rate + 1})
-                pred_out = pred_out * dev_meta["log_stftm_std"] + dev_meta["log_stftm_mean"]
+            debug_att = np.zeros([32, 10], dtype=np.float32)
+            pred_out = sess.run(model.post_output, feed_dict={inp: batch_inp, inp_mask: batch_inp_mask,
+                                                              decode_time_steps: batch_mel_gtruth.shape[
+                                                                                     1] // hp.reduction_rate + 1,
+                                                              style_attention: debug_att})
+            pred_out = pred_out * dev_meta["log_stftm_std"] + dev_meta["log_stftm_mean"]
 
-                for audio_i in range(12):
-                    pred_audio, exp_spec = audio.invert_spectrogram(pred_out[audio_i], 1.2)
-                    wav_folder = os.path.join(generate_path, "audio_%d" % (audio_i))
-                    if not os.path.exists(wav_folder):
-                        os.makedirs(wav_folder)
-                    siowav.write(os.path.join(wav_folder, "nt%d_style_%d.wav" % (random_num, style_no)), hp.sample_rate, pred_audio)
+            for audio_i in range(1):
+                pred_audio, exp_spec = audio.invert_spectrogram(pred_out[audio_i], 1.2)
+                wav_folder = os.path.join(generate_path, "audio_%d" % (audio_i))
+                if not os.path.exists(wav_folder):
+                    os.makedirs(wav_folder)
+                siowav.write(os.path.join(wav_folder, "debug.wav" ), hp.sample_rate,
+                             pred_audio)
+
+            # for style_no in range(72):
+            #     unique_style_attention = get_style_attention(style_no)
+            #     pred_out = sess.run(model.post_output, feed_dict={inp: batch_inp, inp_mask: batch_inp_mask, decode_time_steps: batch_mel_gtruth.shape[1] // hp.reduction_rate + 1, style_attention: unique_style_attention})
+            #     pred_out = pred_out * dev_meta["log_stftm_std"] + dev_meta["log_stftm_mean"]
+            #
+            #     for audio_i in range(12):
+            #         pred_audio, exp_spec = audio.invert_spectrogram(pred_out[audio_i], 1.2)
+            #         wav_folder = os.path.join(generate_path, "audio_%d" % (audio_i))
+            #         if not os.path.exists(wav_folder):
+            #             os.makedirs(wav_folder)
+            #         siowav.write(os.path.join(wav_folder, "nt%d_style_%d.wav" % (random_num, style_no)), hp.sample_rate, pred_audio)
 
 
 

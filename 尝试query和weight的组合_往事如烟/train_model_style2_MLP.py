@@ -10,6 +10,8 @@ from tensorflow.python.ops import array_ops
 
 import os
 
+unkonwn_parallel_iterations = 128
+
 
 def l1_loss(gtruth, predict):
     return tf.reduce_mean(tf.abs(gtruth - predict))
@@ -51,7 +53,15 @@ class Tacotron(Model):
                                           projection_filters=(128, 128), highway_layers=4, highway_units=128,
                                           bi_gru_units=128, sequence_length=inp_mask,
                                           name='encoder_cbhg', reuse=False)
+
+            with tf.variable_scope('post_text'):
+                all_outputs, _ = tf.nn.dynamic_rnn(cell=GRUCell(256), inputs=encoder_output, sequence_length=inp_mask,
+                                               dtype=encoder_output.dtype, parallel_iterations=unkonwn_parallel_iterations)
+                all_outputs = tf.transpose(all_outputs, [1, 0, 2])
+                static_encoder_output = all_outputs[-1]
             ### Encoder [end]
+
+
 
             ### Attention Module
             with tf.variable_scope('attention'):
@@ -61,16 +71,14 @@ class Tacotron(Model):
 
             ### Decoder [begin]
             att_cell = GRUCell(256)
-            att_cell_style = GRUCell(256)
             dec_cell = MultiRNNCell([ResidualWrapper(GRUCell(256)) for _ in range(2)])
             # prepare output alpha TensorArray
             with tf.variable_scope('prepare_decode'):
                 reduc = self.hyper_params.reduction_rate
                 reduced_time_steps = tf.div(output_time_steps, reduc)
                 init_att_cell_state = att_cell.zero_state(batch_size, tf.float32)
-                init_att_cell_state_style = att_cell_style.zero_state(batch_size, tf.float32)
                 init_dec_cell_state = dec_cell.zero_state(batch_size, tf.float32)
-                init_state_tup = tuple([init_att_cell_state, init_dec_cell_state, init_att_cell_state_style])
+                init_state_tup = tuple([init_att_cell_state, init_dec_cell_state])
                 init_output_ta = tf.TensorArray(size=reduced_time_steps, dtype=tf.float32)
                 init_alpha_ta = tf.TensorArray(size=reduced_time_steps, dtype=tf.float32)
                 init_weight_ta = tf.TensorArray(size=reduced_time_steps, dtype=tf.float32)
@@ -91,40 +99,38 @@ class Tacotron(Model):
                 with tf.variable_scope('attention_rnn'):
                     att_cell_inp = tf.concat([old_context, dec_pre_ed_inp], axis=-1)
                     att_cell_out, att_cell_state = att_cell(att_cell_inp, old_state_tup[0])
-                with tf.variable_scope('attention_rnn_style'):
-                    att_cell_inp_style = tf.concat([old_context_style, dec_pre_ed_inp], axis=-1)
-                    att_cell_out_style, att_cell_state_style = att_cell_style(att_cell_inp_style, old_state_tup[2])
-
                 with tf.variable_scope('attention'):
                     query = att_cell_state[0]
                     context, alpha = att_module(query)
                     new_alpha_ta = old_alpha_ta.write(this_time, alpha)
                 with tf.variable_scope("attention_style"):
-                    query_style = att_cell_state_style[0]
-                    # query_style = tf.Print(query_style, [query_style], message='query:', summarize=20)
+                    query_style = att_cell_state[0]
                     context_style, alpha_style = att_module_style(query_style)
-
-
                     new_alpha_style_ta = old_alpha_style_ta.write(this_time, alpha_style)
                 with tf.variable_scope("weighting"):
-                    weighting = tf.layers.dense(dec_pre_ed_inp, 1, tf.nn.sigmoid)
+                    # weight_dec_pre_ed_inp = tf.expand_dims(tf.layers.dense(dec_pre_ed_inp, 256, tf.nn.sigmoid), axis=1)
+                    weight_input = tf.concat([static_encoder_output, dec_pre_ed_inp], axis=-1)
+                    weighting = tf.layers.dense(weight_input, 128, tf.nn.sigmoid)
+                    weighting = tf.layers.dense(weighting, 2, tf.nn.softmax)
                     # weighting = tf.nn.softmax(weighting)
-                    new_weight_ta = old_weight_ta.write(this_time, weighting)
+                    weight_text, weight_style = tf.split(weighting, [1, 1], -1)
+                    # weighting = tf.nn.softmax(weighting)
+                    new_weight_ta = old_weight_ta.write(this_time, weight_text)
                 with tf.variable_scope('decoder_rnn'):
-                    weighting_context = weighting * context + (1 - weighting) * context_style
-                    weight_per = tf.reduce_mean(tf.abs((1 - weighting) * context_style) / (tf.abs(weighting * context) + tf.abs((1 - weighting) * context_style)))
+                    weighting_context = weight_text * context + weight_style * context_style
+                    weight_per = tf.reduce_mean(tf.abs(weight_style * context_style) / (tf.abs(weight_text * context) + tf.abs(weight_style * context_style)))
                     new_weight_per_ta = old_weight_per_ta.write(this_time, weight_per)
                     dec_input = tf.layers.dense(tf.concat([att_cell_out, weighting_context], axis=-1), 256)
                     dec_cell_out, dec_cell_state = dec_cell(dec_input, old_state_tup[1])
                     dense_out = tf.layers.dense(dec_cell_out, self.hyper_params.seq2seq_dim * reduc)
                     new_output_ta = old_output_ta.write(this_time, dense_out)
-                new_state_tup = tuple([att_cell_state, dec_cell_state, att_cell_state_style])
+                new_state_tup = tuple([att_cell_state, dec_cell_state])
                 return tf.add(this_time, 1), context, context_style, new_output_ta, new_alpha_ta, new_alpha_style_ta, new_weight_ta, new_weight_per_ta, new_state_tup
 
             # run loop
             _, _, _, seq2seq_output_ta, alpha_ta, alpha_style_ta, weight_ta, weight_per_ta, *_ = tf.while_loop(cond, body, [init_time, init_context, init_context_style, init_output_ta,
                                                                                init_alpha_ta, init_alpha_style_ta, init_weight_ta, init_weight_per_ta, init_state_tup],
-                                                                  parallel_iterations=32)
+                                                                  parallel_iterations=unkonwn_parallel_iterations)
 
             with tf.variable_scope('reshape_decode'):
                 seq2seq_output = tf.reshape(seq2seq_output_ta.stack(),

@@ -7,8 +7,11 @@ import math
 from tensorflow.contrib.rnn import MultiRNNCell, ResidualWrapper
 
 
-input = tf.get_variable(name='input', shape=(2, 3, 4), dtype=tf.float32, initializer=tf.constant_initializer(1))
-
+input = tf.get_variable(name='input', shape=(2, 3), dtype=tf.float32, initializer=tf.constant_initializer([[1, 2, 3], [3, 4, 400]]))
+mean, variance = tf.nn.moments(input, axes=[0], keep_dims=True)
+default_epsilon=0.001
+input = tf.nn.batch_normalization(input, mean, variance, None, None, default_epsilon)
+'''
 def self_rnn(input, units=128, layer_num = 2, parallel_iterations=64, name='gru', reuse=False):
     with tf.variable_scope(name_or_scope=name):
         with tf.variable_scope('enc'):
@@ -49,17 +52,14 @@ def self_rnn(input, units=128, layer_num = 2, parallel_iterations=64, name='gru'
 final_res = self_rnn(input, units=4, layer_num=2)
 
 
-
+'''
 with tf.Session() as sess:
     sess.run([tf.global_variables_initializer(), tf.local_variables_initializer()])
-    out1 = sess.run(final_res)
+    out1, a, b = sess.run([input, mean, variance])
     print(out1)
     print('adfas')
+    print(a, b)
 
-    def test():
-        return 1, 2, 3, 4, 5
-    a, b, *_ = test()
-    print(b)
 
 
 
