@@ -9,23 +9,24 @@ import math
 import codecs
 import copy
 from best_tacotron.hyperparameter_style import HyperParams
-from best_tacotron.generate_model_style2_Ctr import Tacotron
+from best_tacotron.generate_model_sentence_style3_different_id_Ctr import Tacotron
 import scipy.io.wavfile as siowav
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 hp = HyperParams()
 
 
-data_name = 'sr16_aB_3_style2'
+data_name = 'sr16_aB_sentence_style3'
 save_path = os.path.join('model', data_name)
 model_name = "TTS"
 tfrecord_train_path = './data/sr16_aB_sorted_train.tfrecords'
 tfrecord_dev_path = './data/sr16_aB_sorted_dev.tfrecords'
+pkl_train_id_path = './data/sr16_aB_sorted_train_id.pkl'
 pkl_train_path = './data/sr16_aB_sorted_train.pkl'
 pkl_dev_path = './data/sr16_aB_sorted_dev.pkl'
 tb_logs_path = os.path.join('logs', data_name) + '/generate_log/'
 dev_txt_path = os.path.join('logs', data_name) + '/dev_loss.txt'
-generate_path = os.path.join('logs', data_name) + '/generate_Ctr_final_mult0.4/'
+generate_path = os.path.join('logs', data_name) + '/generate_select_different_id_10/'
 
 
 
@@ -160,9 +161,10 @@ def main():
     with tf.variable_scope('data'):
         inp = tf.placeholder(name='inp', shape=(None, None), dtype=tf.int32)
         inp_mask = tf.placeholder(name='inp_mask', shape=(None,), dtype=tf.int32)
+        inp_id = tf.placeholder(name='inp_id', shape=(None,), dtype=tf.int32)
         decode_time_steps = tf.placeholder(name='decode_time_steps', shape=(), dtype=tf.int32)
-        ctr_flag = tf.placeholder(name='ctr_flag', shape=(), dtype=tf.int32)
-        style_attention = tf.placeholder(name='style_att', shape=(None, 10), dtype=tf.float32)
+        # seq2seq_gtruth = tf.placeholder(name='seq2seq_gtruth', shape=(None, None, hp.seq2seq_dim), dtype=tf.float32)
+        # post_gtruth = tf.placeholder(name='post_gtruth', shape=(None, None, hp.post_dim), dtype=tf.float32)
 
 
 
@@ -178,9 +180,14 @@ def main():
     print(dev_meta.keys())
     dev_char_map = dev_meta['char_map']
 
+    # txt = ["She glanced at his newspaper, then stopped and stared.",
+    #        "I think you'll have to marry Count Paris.",
+    #        "My house is the best of all!"]
+
     txt = ["She glanced at his newspaper, then stopped and stared.",
            "I think you'll have to marry Count Paris.",
            "My house is the best of all!"]
+
     # print('**', txt[0][0])
     max_txt_len = 0
     for i in range(len(txt)):
@@ -203,8 +210,8 @@ def main():
     txt_mask = np.asarray(txt_mask)
     # print(txt_mask)
 
-    model = Tacotron(inp, inp_mask, decode_time_steps, ctr_flag, style_attention, hyper_params=hp)
 
+    model = Tacotron(inp, inp_mask, inp_id, decode_time_steps, hyper_params=hp)
 
     dev_batches_per_epoch = math.ceil(len(dev_meta['key_lst']) / hp.batch_size)
     if not os.path.exists(generate_path):
@@ -219,9 +226,12 @@ def main():
 
         saver = tf.train.Saver(max_to_keep=20)
         model.saver = saver
-        ass_style_token = tf.placeholder(name="ass_style_token", shape=(1, hp.styles_kind, hp.style_dim),
-                                         dtype=tf.float32)
-        ass_opt = model.single_style_token.assign(ass_style_token)
+        # ass_style_token = tf.placeholder(name="ass_style_token", shape=(1, hp.styles_kind, hp.style_dim),
+        #                                  dtype=tf.float32)
+        # ass_opt = model.single_style_token.assign(ass_style_token)
+        # ass_inp_att = tf.placeholder(name="ass_inp_att", shape=(None, hp.styles_kind),
+        #                              dtype=tf.float32)
+        # att_ass_opt = model.inp_att.assign(ass_inp_att)
         if ckpt:
             ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
             saver.restore(sess, os.path.join(save_path, ckpt_name))
@@ -231,28 +241,53 @@ def main():
 
         wav_folder = os.path.join(generate_path, data_name)
 
-        #no ctr
-        unique_style_attention = np.zeros([len(txt_inp), 10], dtype=np.float32)
-        pred_out = sess.run(model.post_output, feed_dict={inp: txt_inp, inp_mask: txt_mask,
-                                                          decode_time_steps: 60,
-                                                          ctr_flag: 0,
-                                                          style_attention: unique_style_attention})
-        pred_out = pred_out * dev_meta["log_stftm_std"] + dev_meta["log_stftm_mean"]
-        for j in range(len(txt_inp)):
-            pred_audio, exp_spec = audio.invert_spectrogram(pred_out[j], 1.2)
-            # wav_folder = os.path.join(generate_path, data_name)
-            if not os.path.exists(wav_folder):
-                os.makedirs(wav_folder)
-            siowav.write(os.path.join(wav_folder, "audio%d_style_%d.wav" % (j, 100)), hp.sample_rate,
-                         pred_audio)
+
+        with open('selected_data_10.pkl', 'rb') as f:
+            selected_data = pkl.load(f)
+        # print(selected_data['batch_id'], selected_data['batch_key'])
+        # return
+        print('no ctr')
+        for id_no in range(len(selected_data['batch_id'])):
+            now_id_no = selected_data['batch_id'][id_no]
+            for i in range(len(selected_data['batch_id'])):
+                pred_out = sess.run(model.post_output,
+                            feed_dict={inp: [selected_data['batch_inp'][i]],
+                                       inp_mask: [selected_data['batch_inp_mask'][i]],
+                                       inp_id: [now_id_no],
+                                       decode_time_steps: 60
+                                       })
+                pred_out = pred_out * dev_meta["log_stftm_std"] + dev_meta["log_stftm_mean"]
+                for j in range(1):
+                    pred_audio, exp_spec = audio.invert_spectrogram(pred_out[j], 1.2)
+                    # wav_folder = os.path.join(generate_path, data_name)
+                    if not os.path.exists(wav_folder):
+                        os.makedirs(wav_folder)
+                    siowav.write(os.path.join(wav_folder, "%s_audio%d_style_%d.wav" % (selected_data['batch_char_txt'][i][:3], selected_data['batch_id'][i], now_id_no)), hp.sample_rate,
+                                 pred_audio)
+
+            pred_out = sess.run(model.post_output,
+                                feed_dict={inp: txt_inp, inp_mask: txt_mask, inp_id: np.ones(len(txt)) * now_id_no,
+                                           decode_time_steps: 60,
+                                           })
+
+            pred_out = pred_out * dev_meta["log_stftm_std"] + dev_meta["log_stftm_mean"]
+            for j in range(len(txt)):
+                pred_audio, exp_spec = audio.invert_spectrogram(pred_out[j], 1.2)
+                # wav_folder = os.path.join(generate_path, data_name)
+                if not os.path.exists(wav_folder):
+                    os.makedirs(wav_folder)
+                siowav.write(os.path.join(wav_folder, "test_audio%d_style_%d.wav" % (j, now_id_no)), hp.sample_rate,
+                             pred_audio)
+        '''
         #ctr, no style
+        print('no style')
         unique_style_attention = np.zeros([len(txt_inp), 10], dtype=np.float32)
-        pred_out = sess.run(model.post_output, feed_dict={inp: txt_inp, inp_mask: txt_mask,
+        # sess.run(att_ass_opt, feed_dict={ass_inp_att: unique_style_attention})
+        pred_out = sess.run(model.post_output, feed_dict={inp: txt_inp, inp_mask: txt_mask, inp_att: unique_style_attention,
                                                           decode_time_steps: 60,
-                                                          ctr_flag: 1,
-                                                          style_attention: unique_style_attention})
+                                                          })
         pred_out = pred_out * dev_meta["log_stftm_std"] + dev_meta["log_stftm_mean"]
-        for j in range(len(txt_inp)):
+        for j in range(len(txt)):
             pred_audio, exp_spec = audio.invert_spectrogram(pred_out[j], 1.2)
             # wav_folder = os.path.join(generate_path, data_name)
             if not os.path.exists(wav_folder):
@@ -262,15 +297,16 @@ def main():
 
         #ctr, spec style
         for i in range(10):
+            print('style', i)
             unique_style_attention = np.zeros([len(txt_inp), 10], dtype=np.float32)
             for j in range(len(txt_inp)):
-                unique_style_attention[j][i] = 0.4
-            pred_out = sess.run(model.post_output, feed_dict={inp: txt_inp, inp_mask: txt_mask,
+                unique_style_attention[j][i] = 0.5
+            # sess.run(att_ass_opt, feed_dict={ass_inp_att: unique_style_attention})
+            pred_out = sess.run(model.post_output, feed_dict={inp: txt_inp, inp_mask: txt_mask, inp_att: unique_style_attention,
                                                               decode_time_steps: 60,
-                                                              ctr_flag: 1,
-                                                              style_attention: unique_style_attention})
+                                                              })
             pred_out = pred_out * dev_meta["log_stftm_std"] + dev_meta["log_stftm_mean"]
-            for j in range(len(txt_inp)):
+            for j in range(len(txt)):
                 pred_audio, exp_spec = audio.invert_spectrogram(pred_out[j], 1.2)
                 # wav_folder = os.path.join(generate_path, data_name)
                 if not os.path.exists(wav_folder):
@@ -278,7 +314,7 @@ def main():
                 siowav.write(os.path.join(wav_folder, "audio%d_style_%d.wav" % (j, i)), hp.sample_rate,
                              pred_audio)
 
-
+        '''
 
 
 

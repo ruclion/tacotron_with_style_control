@@ -8,17 +8,19 @@ import hjk_tools.audio as audio
 import math
 import codecs
 from best_tacotron.hyperparameter_style import HyperParams
-from best_tacotron.train_model_style2 import Tacotron
+from best_tacotron.train_model_sentence_style3 import Tacotron
 
+#
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 hp = HyperParams()
 
-
-data_name = 'sr16_aB_3_style2'
+data_name = 'sr16_aB_sentence_style3'
 save_path = os.path.join('model', data_name)
+save_data_att_path = os.path.join(save_path, 'style_dict.pkl')
 model_name = "TTS"
 tfrecord_train_path = './data/sr16_aB_sorted_train.tfrecords'
 tfrecord_dev_path = './data/sr16_aB_sorted_dev.tfrecords'
+pkl_train_id_path = './data/sr16_aB_sorted_train_id.pkl'
 pkl_train_path = './data/sr16_aB_sorted_train.pkl'
 pkl_dev_path = './data/sr16_aB_sorted_dev.pkl'
 tb_logs_path = os.path.join('logs', data_name) + '/'
@@ -27,7 +29,7 @@ dev_txt_path = os.path.join('logs', data_name) + '/dev_loss.txt'
 
 
 def parse_single_example(example_proto):
-    features = {
+    features = {"key": tf.FixedLenFeature([], tf.string),
                 "frames": tf.FixedLenFeature([], tf.int64),
                 "char_txt": tf.FixedLenFeature([], tf.string),
                 "txt_raw": tf.FixedLenFeature([], tf.string),
@@ -35,13 +37,14 @@ def parse_single_example(example_proto):
                 "log_mel_raw": tf.FixedLenFeature([], tf.string),
                 "log_stftm_raw": tf.FixedLenFeature([], tf.string)}
     parsed = tf.parse_single_example(example_proto, features=features)
+    key = parsed["key"]
     frames = tf.cast(parsed["frames"], tf.int32)
     char_txt = parsed["char_txt"]
     txt = tf.decode_raw(parsed["txt_raw"], tf.int32)
     txt_len = tf.cast(parsed["txt_len"], tf.int32)
     log_mel = tf.reshape(tf.decode_raw(parsed["log_mel_raw"], tf.float32), (frames, hp.seq2seq_dim))
     log_stftm = tf.reshape(tf.decode_raw(parsed["log_stftm_raw"], tf.float32), (frames, hp.post_dim))
-    return {"frames": frames, "char_txt": char_txt, "txt":txt, "txt_len":txt_len, "log_mel": log_mel, "log_stftm": log_stftm}
+    return {"key":key, "frames": frames, "char_txt": char_txt, "txt":txt, "txt_len":txt_len, "log_mel": log_mel, "log_stftm": log_stftm}
     # return {"frames": frames, "txt":txt, "txt_len":txt_len, "log_mel": log_mel, "log_stftm": log_stftm}
 
 
@@ -49,12 +52,14 @@ def get_dataset(tfrecord_path, shuffle_buf, repeat_times):
     dataset = tf.data.TFRecordDataset(tfrecord_path)
     dataset = dataset.map(parse_single_example)
     dataset = dataset.padded_batch(hp.batch_size, padded_shapes={
+        "key": (),
         "frames": (),
         "char_txt": (),
         "txt": [None],
         "txt_len": (),
         "log_mel": [None, hp.seq2seq_dim],
         "log_stftm": [None, hp.post_dim]}, padding_values={
+        "key": "",
         "frames": 0,
         "char_txt": "",
         "txt": np.int32(0),
@@ -77,8 +82,11 @@ def init_next_batch(tfrecord_path, shuffle_buf, repeat_times):
 
 def get_next_batch(sess, next_item):
     t = sess.run(next_item)
+    # while t['txt'].shape[0] != 32:
+    #     t = sess.run(next_item)
+    #     print('not 32 batch happen')
     # print('frames:', t['frames'])
-    return t['txt'], t['txt_len'], t['log_mel'], t['log_stftm']
+    return t['txt'], t['txt_len'], t['log_mel'], t['log_stftm'], t['key']
 def post_next_batch(batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth, stats_meta):
     init_time_stamp = batch_mel_gtruth.shape[1]
     fix_time_stamp = init_time_stamp // hp.reduction_rate * hp.reduction_rate
@@ -113,13 +121,43 @@ def get_style_token(trained_style_token, style_no):
             unique_style_token = unique_style_token * 0 + trained_style_token[0][tag]
     return unique_style_token
 
+# def linear_change_to_one(vec):
+#     vec = np.maximum(0, vec)
+#     sum = np.sum(vec)
+#     vec = vec / sum
+#     return vec
+def get_id_from_key(key_list, data_dict):
+    ans = []
+    for var in key_list:
+        key = var.decode()
+        ans.append(data_dict[key])
+    ans = np.asarray(ans)
+    return ans
 
-
+# def get_att_from_key(key_list, data_dict):
+#     ans = []
+#     for var in key_list:
+#         key = var.decode()
+#         # print('here???')
+#         # print(key)
+#         if key in data_dict:
+#             pass
+#         else:
+#             # print('this')
+#             data_dict[key] = linear_change_to_one(np.random.uniform(low=0, high=1, size=(hp.styles_kind)))
+#         ans.append(data_dict[key])
+#     ans = np.asarray(ans)
+#     return ans
+# def change_dict_from_return(key_list, return_att, data_dict):
+#     for i, var in enumerate(key_list):
+#         var = var.decode()
+#         data_dict[var] = linear_change_to_one(return_att[i])
 
 def main():
     with tf.variable_scope('data'):
         inp = tf.placeholder(name='inp', shape=(None, None), dtype=tf.int32)
         inp_mask = tf.placeholder(name='inp_mask', shape=(None,), dtype=tf.int32)
+        inp_id = tf.placeholder(name='inp_id', shape=(None,), dtype=tf.int32)
         seq2seq_gtruth = tf.placeholder(name='seq2seq_gtruth', shape=(None, None, hp.seq2seq_dim), dtype=tf.float32)
         post_gtruth = tf.placeholder(name='post_gtruth', shape=(None, None, hp.post_dim), dtype=tf.float32)
 
@@ -139,7 +177,7 @@ def main():
         dev_meta = pkl.load(f)
         dev_meta['reduction_rate'] = hp.reduction_rate
 
-    train_model = Tacotron(inp=inp, inp_mask=inp_mask, seq2seq_gtruth=seq2seq_gtruth, post_gtruth=post_gtruth,
+    train_model = Tacotron(inp=inp, inp_mask=inp_mask, inp_id = inp_id, seq2seq_gtruth=seq2seq_gtruth, post_gtruth=post_gtruth,
                            hyper_params=hp, training=True, reuse=False)
 
     with tf.variable_scope('optimizer'):
@@ -149,13 +187,13 @@ def main():
         #     train_upd = opt.apply_gradients(zip(grad, var), global_step=train_model.global_step)
 
         grads_and_vars = opt.compute_gradients(train_model.loss)
-        for i, (grad, var) in enumerate(grads_and_vars):
-            # print(var.name)
-            if var.name.find('style_token:0') != -1:
-                grads_and_vars[i] = (grad * 0, var)
-                print(var.name)
-                print('hhhh time')
-                break
+        # for i, (grad, var) in enumerate(grads_and_vars):
+        #     # print(var.name)
+        #     if var.name.find('style_token:0') != -1:
+        #         grads_and_vars[i] = (grad / 200.0, var)
+        #         print(var.name)
+        #         print('hhhh time')
+        #         break
         with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
             train_upd = opt.apply_gradients(grads_and_vars, global_step=train_model.global_step)
 
@@ -168,23 +206,34 @@ def main():
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
     with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
         train_model.sess = sess
-        writer = tf.summary.FileWriter(tb_logs_path, filename_suffix='train')
+        writer = tf.summary.FileWriter(tb_logs_path, filename_suffix='train', graph=sess.graph)
         sess.run([tf.global_variables_initializer(), tf.local_variables_initializer()])
         ckpt = tf.train.get_checkpoint_state(save_path)
         saver = tf.train.Saver(max_to_keep=20)
         train_model.saver = saver
         ass_style_token = tf.placeholder(name="ass_style_token", shape=(1, hp.styles_kind, hp.style_dim), dtype=tf.float32)
         ass_opt = train_model.single_style_token.assign(ass_style_token)
+        # ass_inp_att = tf.placeholder(name="ass_inp_att", shape=(None, hp.styles_kind),
+        #                                  dtype=tf.float32)
+        # att_ass_opt = train_model.inp_att.assign(ass_inp_att)
+        with open(pkl_train_id_path, "rb") as f:
+            data_id_dict = pkl.load(f)
         if ckpt:
             ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
             saver.restore(sess, os.path.join(save_path, ckpt_name))
             print('restore path:', ckpt_name)
+            # with open(save_data_att_path, "rb") as f:
+            #     data_style_att_dict = pkl.load(f)
+            # print('load att dict')
         else:
             print('no restor, init all include style:')
             # np.random.seed(1)
             init_style_token = np.random.uniform(low=-1, high=1, size=(1, hp.styles_kind, hp.style_dim))
             print('look random:', np.max(init_style_token), np.min(init_style_token))
             sess.run(ass_opt, feed_dict={ass_style_token: init_style_token})
+            # data_style_att_dict = dict()
+
+
 
         train_next_item = init_next_batch(tfrecord_train_path, 7001, 2000)
         # dev_next_item = init_next_batch(tfrecord_dev_path, 1, 2000)
@@ -203,62 +252,71 @@ def main():
             for cnt in tqdm.tqdm(range(already_step_eval + 1, hp.max_global_steps + 10)):
                 # print('now is', cnt)
                 pre_time = time.time()
-                batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth = get_next_batch(sess, train_next_item)
+                batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth, batch_key = get_next_batch(sess, train_next_item)
                 # print('bug', batch_inp[0], 'len', batch_inp_mask[0], 'actual', batch_inp[0].shape)
                 batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth = post_next_batch(batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth, train_meta)
+                batch_id = get_id_from_key(batch_key, data_id_dict)
+                # print(batch_id)
+                # print(batch_key)
+                # for var in batch_key:
+                #     print(var.decode('utf-8'))
+                # # print(batch_key.decode('utf-8'))
+                #
+                # return
                 # print(batch_mel_gtruth.shape[1], batch_inp[0][0])
                 # print(batch_inp_mask)
                 # print('look', batch_mel_gtruth[0], batch_spec_gtruth[0])
                 train_time = time.time()
                 # print('pre time:', train_time - pre_time)
 
+                # sess.run(att_ass_opt, feed_dict={ass_inp_att:batch_att})
                 _, loss_eval, global_step_eval = sess.run(
                     [train_upd, train_model.loss, train_model.global_step],
-                    feed_dict={inp: batch_inp, inp_mask: batch_inp_mask,
+                    feed_dict={inp: batch_inp, inp_mask: batch_inp_mask, inp_id: batch_id,
                                seq2seq_gtruth: batch_mel_gtruth,
                                post_gtruth: batch_spec_gtruth})
+                # return_att = sess.run(train_model.inp_att)
+                # change_dict_from_return(batch_key, return_att, data_style_att_dict)
                 # print('step:', global_step_eval)
 
                 if cnt % 50 == 0:
                 # if cnt % 5 == 0:
                     summary_str = sess.run(train_scalar_summary,
-                        feed_dict={inp: batch_inp, inp_mask: batch_inp_mask,
+                        feed_dict={inp: batch_inp, inp_mask: batch_inp_mask, inp_id: batch_id,
                                    seq2seq_gtruth: batch_mel_gtruth,
                                    post_gtruth: batch_spec_gtruth})
                     writer.add_summary(summary_str, global_step_eval)
                 if cnt % 200 == 0:#about one epoch
-                # if cnt % 10 == 0:#about one epoch
                     summary_str = sess.run(train_alpha_summary,
-                                           feed_dict={inp: batch_inp, inp_mask: batch_inp_mask,
+                                           feed_dict={inp: batch_inp, inp_mask: batch_inp_mask, inp_id: batch_id,
                                                       seq2seq_gtruth: batch_mel_gtruth,
                                                       post_gtruth: batch_spec_gtruth})
                     writer.add_summary(summary_str, global_step_eval)
-                    dev_loss = 0
-                    dev_batches_per_epoch = 0
-                    dev_next_item = init_next_batch(tfrecord_dev_path, 1000, 1)#use the last batch to listen feel
-                    while True:
-                        try:
-                            batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth = get_next_batch(sess,
-                                                                                                            dev_next_item)
-                            batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth = post_next_batch(batch_inp,
-                                                                                                             batch_inp_mask,
-                                                                                                             batch_mel_gtruth,
-                                                                                                             batch_spec_gtruth,
-                                                                                                             dev_meta)
-                            _loss = sess.run(train_model.loss,
-                                             feed_dict={inp: batch_inp, inp_mask: batch_inp_mask,
-                                                        seq2seq_gtruth: batch_mel_gtruth,
-                                                        post_gtruth: batch_spec_gtruth})
-                            dev_loss += _loss
-                            dev_batches_per_epoch += 1
-                        except:
-                            dev_loss /= dev_batches_per_epoch
-                            dev_loss_summary_str = sess.run(dev_loss_summary,
-                                                              feed_dict={dev_loss_holder: dev_loss})
-                            writer.add_summary(dev_loss_summary_str, global_step_eval)
-                            break
+                    # dev_loss = 0
+                    # dev_batches_per_epoch = 0
+                    # dev_next_item = init_next_batch(tfrecord_dev_path, 1000, 1)#use the last batch to listen feel
+                    # while True:
+                    #     try:
+                    #         batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth = get_next_batch(sess,
+                    #                                                                                         dev_next_item)
+                    #         batch_inp, batch_inp_mask, batch_mel_gtruth, batch_spec_gtruth = post_next_batch(batch_inp,
+                    #                                                                                          batch_inp_mask,
+                    #                                                                                          batch_mel_gtruth,
+                    #                                                                                          batch_spec_gtruth,
+                    #                                                                                          dev_meta)
+                    #         _loss = sess.run(train_model.loss,
+                    #                          feed_dict={inp: batch_inp, inp_mask: batch_inp_mask,
+                    #                                     seq2seq_gtruth: batch_mel_gtruth,
+                    #                                     post_gtruth: batch_spec_gtruth})
+                    #         dev_loss += _loss
+                    #         dev_batches_per_epoch += 1
+                    #     except:
+                    #         dev_loss /= dev_batches_per_epoch
+                    #         dev_loss_summary_str = sess.run(dev_loss_summary,
+                    #                                           feed_dict={dev_loss_holder: dev_loss})
+                    #         writer.add_summary(dev_loss_summary_str, global_step_eval)
+                    #         break
                 if cnt % 2000 == 0:
-                # if cnt % 15 == 0:
                     train_model.save(save_path, global_step_eval)
                     all_pred_out = []
                     trained_style_token = sess.run(train_model.single_style_token)
@@ -266,6 +324,7 @@ def main():
                         unique_style_token = get_style_token(trained_style_token, style_no)
                         sess.run(ass_opt, feed_dict={ass_style_token: unique_style_token})
                         pred_out = sess.run(train_model.post_output, feed_dict={inp: batch_inp, inp_mask: batch_inp_mask,
+                                                                                inp_id: batch_id,
                                                           seq2seq_gtruth: batch_mel_gtruth,
                                                           post_gtruth: batch_spec_gtruth})
                         pred_out = pred_out * train_meta["log_stftm_std"] + train_meta["log_stftm_mean"]

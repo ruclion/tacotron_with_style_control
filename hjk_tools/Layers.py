@@ -4,6 +4,41 @@ from tensorflow.python.ops import array_ops
 from TFCommon.RNNCell import GRUCell
 from tensorflow.contrib.rnn import MultiRNNCell, ResidualWrapper
 
+
+def Reference_embedding(inputs, input_lengths, training=True, channels=[32, 64, 128], gru_unit=128, name='reference_embedding', reuse=False):
+    with tf.variable_scope(name, reuse=reuse):
+        Mel_dim_size = 80
+        batch_size = tf.shape(inputs)[0]
+        input_time_steps = tf.shape(inputs)[1]
+        if len(inputs.shape) == 3:
+            inputs = tf.expand_dims(inputs, axis=-1)
+        mask = tf.expand_dims(
+                tf.expand_dims(array_ops.sequence_mask(input_lengths, tf.shape(inputs)[1], tf.float32), axis=-1), axis=-1)
+        loop_conv2d = inputs * mask
+        for idk, channel in enumerate(channels):
+            loop_conv2d = tf.layers.conv2d(loop_conv2d, filters=channel, kernel_size=(3, 3), strides=(2, 2),
+                             padding='same', name='conv2d_{}'.format(idk), activation=tf.nn.relu)
+            input_lengths = tf.ceil(input_lengths / 2)
+            mask = tf.expand_dims(
+                tf.expand_dims(array_ops.sequence_mask(input_lengths, tf.shape(loop_conv2d)[1], tf.float32), axis=-1), axis=-1)
+            loop_conv2d = loop_conv2d * mask
+            loop_conv2d = tf.layers.batch_normalization(loop_conv2d, training=training)
+            loop_conv2d = loop_conv2d * mask
+            Mel_dim_size = math.ceil(Mel_dim_size / 2)
+        loop_conv2d = tf.reshape(loop_conv2d, shape=(batch_size, -1, Mel_dim_size*channels[-1]))
+        gru_output = gru(loop_conv2d, gru_unit, sequence_length=input_lengths)
+        gru_output = tf.transpose(gru_output, [1, 0, 2])
+        output = gru_output[-1]
+        output = tf.layers.dense(output, units=gru_unit, activation=tf.nn.tanh, name='after_dense_style_emb')
+    return output
+
+
+
+
+
+
+
+
 #conv1d_bank, include: conv1d+batch_normalization without pooling(watch out: trainning and train_dependency)
 def conv1d_bank(inputs, training=True, k=16, bank_filters=128, name='conv1d_bank', reuse=False):
     with tf.variable_scope(name, reuse=reuse):

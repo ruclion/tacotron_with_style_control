@@ -8,13 +8,13 @@ import hjk_tools.audio as audio
 import math
 import codecs
 from best_tacotron.hyperparameter_style import HyperParams
-from best_tacotron.train_model_style2 import Tacotron
+from best_tacotron.train_model_sentence_style3_nw import Tacotron
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 hp = HyperParams()
 
 
-data_name = 'sr16_aB_3_style2'
+data_name = 'sr16_aB_sentence_style3_nw'
 save_path = os.path.join('model', data_name)
 model_name = "TTS"
 tfrecord_train_path = './data/sr16_aB_sorted_train.tfrecords'
@@ -152,7 +152,7 @@ def main():
         for i, (grad, var) in enumerate(grads_and_vars):
             # print(var.name)
             if var.name.find('style_token:0') != -1:
-                grads_and_vars[i] = (grad * 0, var)
+                grads_and_vars[i] = (grad / 200.0, var)
                 print(var.name)
                 print('hhhh time')
                 break

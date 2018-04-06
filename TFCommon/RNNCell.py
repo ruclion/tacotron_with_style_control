@@ -9,6 +9,7 @@ from tensorflow.contrib.keras import activations
 import TFCommon.Initializer
 
 
+
 class RawGRUCell(RNNCell):
     """Gated Recurrent Unit (GRU) recurrent network cell."""
 
